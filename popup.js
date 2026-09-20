@@ -34,6 +34,31 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.key === 'Escape') window.close();
     });
 
+    // ---- Donations ----
+    // Support the creator via Ko-fi. The page runs under the StreamFlow Pro
+    // brand name, so no personal details are exposed to donors.
+    const DONATE_URL = 'https://ko-fi.com/streamflowpro';
+
+    function openDonatePage() {
+        if (!DONATE_URL || DONATE_URL.includes('yourname')) {
+            popupToast('☕ Donations opening soon — thanks for the support!');
+            return;
+        }
+        chrome.tabs.create({ url: DONATE_URL });
+    }
+    document.getElementById('btn-donate').addEventListener('click', (e) => {
+        e.stopPropagation();
+        openDonatePage();
+    });
+    document.getElementById('row-donate').addEventListener('click', openDonatePage);
+
+    // ---- GitHub repo link ----
+    const GITHUB_URL = 'https://github.com/HaythemGaja/StreamFlow-Pro';
+    document.getElementById('btn-github').addEventListener('click', (e) => {
+        e.stopPropagation();
+        chrome.tabs.create({ url: GITHUB_URL });
+    });
+
     // ---- Small inline toast (replaces alert()) ----
     function popupToast(text) {
         let t = document.getElementById('sf-popup-toast');

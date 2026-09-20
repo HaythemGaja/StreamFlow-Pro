@@ -8,6 +8,7 @@ document.addEventListener('DOMContentLoaded', () => {
     let watchLaterList = [];
     let durationSec = 0;
     let isDraggingScrubber = false;
+    let lastKnownPaused = true; // mirrors the video state for the play/pause icon
 
     // Elements
     const gmcDomain = document.getElementById('gmc-domain');
@@ -27,6 +28,27 @@ document.addEventListener('DOMContentLoaded', () => {
     const wlList = document.getElementById('wl-list');
     const wlContainer = document.getElementById('wl-container');
 
+    // ---- Close button: extension popups support window.close() ----
+    document.getElementById('btn-close').addEventListener('click', () => window.close());
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') window.close();
+    });
+
+    // ---- Small inline toast (replaces alert()) ----
+    function popupToast(text) {
+        let t = document.getElementById('sf-popup-toast');
+        if (!t) {
+            t = document.createElement('div');
+            t.id = 'sf-popup-toast';
+            t.style.cssText = 'position:fixed;top:10px;left:50%;transform:translateX(-50%);background:#0f121a;color:#a8c7fa;padding:8px 14px;border-radius:8px;z-index:9999;font-size:11px;font-weight:600;border:1px solid #8ab4f8;box-shadow:0 6px 20px rgba(0,0,0,.6);max-width:90%;text-align:center;';
+            document.body.appendChild(t);
+        }
+        t.innerText = text;
+        t.style.display = 'block';
+        clearTimeout(t.__timer);
+        t.__timer = setTimeout(() => { t.style.display = 'none'; }, 2200);
+    }
+
     function formatTime(s) {
         if (!s || isNaN(s)) return '0:00';
         const m = Math.floor(s / 60);
@@ -34,29 +56,76 @@ document.addEventListener('DOMContentLoaded', () => {
         return `${m}:${sec < 10 ? '0' : ''}${sec}`;
     }
 
-    // 1. Poll Active Tab for Live Media Status
-    function pollLiveMedia() {
+    function setPlayIcon(paused) {
+        lastKnownPaused = paused;
+        const svgPath = btnPlayPause.querySelector('svg path');
+        if (svgPath) {
+            svgPath.setAttribute('d', paused ? 'M8 5v14l11-7z' : 'M6 19h4V5H6v14zm8-14v14h4V5h-4z');
+        }
+    }
+
+    // ---- Targeted messaging: talk to exactly ONE frame ----
+    // The background service worker remembers which frame owns the video the
+    // user is watching (VIDEO_ACTIVE). We send commands there, falling back to
+    // the top frame (0) when unknown or unreachable.
+    function withTargetTab(cb) {
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (!tabs[0]) return;
-            chrome.tabs.sendMessage(tabs[0].id, { action: 'GET_MEDIA_STATUS' }, (res) => {
-                if (res) {
-                    gmcDomain.innerText = res.hostname || 'Web Video';
-                    gmcTitle.innerText = res.title || 'Video Player';
-                    
-                    const svgPath = btnPlayPause.querySelector('svg path');
-                    if (svgPath) {
-                        svgPath.setAttribute('d', res.paused ? 'M8 5v14l11-7z' : 'M6 19h4V5H6v14zm8-14v14h4V5h-4z');
-                    }
+            const tabId = tabs[0].id;
+            chrome.runtime.sendMessage({ type: 'GET_TARGET_FRAME', tabId }, (res) => {
+                cb(tabId, (res && Number.isInteger(res.frameId)) ? res.frameId : 0);
+            });
+        });
+    }
 
-                    durationSec = res.duration || 0;
-                    timeDuration.innerText = formatTime(durationSec);
-
-                    if (!isDraggingScrubber && durationSec > 0) {
-                        timeCurrent.innerText = formatTime(res.currentTime);
-                        gmcScrubber.value = (res.currentTime / durationSec) * 100;
-                    }
+    function sendToFrame(tabId, frameId, msg) {
+        return new Promise((resolve) => {
+            chrome.tabs.sendMessage(tabId, msg, { frameId }, (res) => {
+                if (chrome.runtime.lastError && frameId !== 0) {
+                    // Elected frame is gone (navigation, closed iframe) — retry top frame.
+                    chrome.tabs.sendMessage(tabId, msg, { frameId: 0 }, (res2) => {
+                        resolve(chrome.runtime.lastError ? null : res2);
+                    });
+                } else {
+                    resolve(chrome.runtime.lastError ? null : res);
                 }
             });
+        });
+    }
+
+    function sendTabAction(action, data = {}) {
+        withTargetTab((tabId, frameId) => {
+            sendToFrame(tabId, frameId, Object.assign({ action }, data));
+        });
+    }
+
+    // 1. Poll Active Tab for Live Media Status
+    function pollLiveMedia() {
+        withTargetTab(async (tabId, frameId) => {
+            const res = await sendToFrame(tabId, frameId, { action: 'GET_MEDIA_STATUS' });
+            if (!res || !res.hasVideo) {
+                // No content script or no video on this page — say so instead of
+                // leaving "Loading Media..." forever.
+                gmcTitle.innerText = 'No video detected on this page';
+                gmcDomain.innerText = 'StreamFlow';
+                timeCurrent.innerText = '0:00';
+                timeDuration.innerText = '0:00';
+                durationSec = 0;
+                gmcScrubber.value = 0;
+                setPlayIcon(true);
+                return;
+            }
+            gmcDomain.innerText = res.hostname || 'Web Video';
+            gmcTitle.innerText = res.title || 'Video Player';
+            setPlayIcon(!!res.paused);
+
+            durationSec = res.duration || 0;
+            timeDuration.innerText = formatTime(durationSec);
+
+            if (!isDraggingScrubber && durationSec > 0) {
+                timeCurrent.innerText = formatTime(res.currentTime);
+                gmcScrubber.value = (res.currentTime / durationSec) * 100;
+            }
         });
     }
 
@@ -65,8 +134,9 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // 2. Transport Button Controls
     btnPlayPause.addEventListener('click', () => {
+        // Optimistic flip: the icon updates instantly, the 500ms poll corrects it.
+        setPlayIcon(!lastKnownPaused);
         sendTabAction('TOGGLE_PLAY');
-        setTimeout(pollLiveMedia, 100);
     });
 
     document.getElementById('btn-rewind').addEventListener('click', () => {
@@ -146,7 +216,7 @@ document.addEventListener('DOMContentLoaded', () => {
             cs_ambient_glow: ambientGlowEnabled
         };
         chrome.storage.local.set(obj);
-        
+
         clearTimeout(syncTimer);
         syncTimer = setTimeout(() => {
             chrome.storage.sync.set(obj).catch(() => {});
@@ -203,12 +273,6 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     // Tool Actions
-    function sendTabAction(action, data = {}) {
-        chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-            if (tabs[0]) chrome.tabs.sendMessage(tabs[0].id, Object.assign({ action }, data)).catch(() => {});
-        });
-    }
-
     document.getElementById('btn-ab-a').addEventListener('click', () => sendTabAction('SET_AB_A'));
     document.getElementById('btn-ab-b').addEventListener('click', () => sendTabAction('SET_AB_B'));
     document.getElementById('btn-ab-clear').addEventListener('click', () => sendTabAction('CLEAR_AB'));
@@ -260,25 +324,25 @@ document.addEventListener('DOMContentLoaded', () => {
         });
     }
 
-    // 5. BULLETPROOF "SAVE VIDEO" HANDLER
+    // 5. "SAVE VIDEO" HANDLER
     document.getElementById('btn-save-wl').addEventListener('click', (e) => {
         e.stopPropagation();
         chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
             if (!tabs[0]) return;
 
-            chrome.tabs.sendMessage(tabs[0].id, { action: 'GET_METADATA' }, (res) => {
+            chrome.tabs.sendMessage(tabs[0].id, { action: 'GET_METADATA' }, { frameId: 0 }, (res) => {
                 let finalUrl = (res && res.url) || tabs[0].url || '';
                 let finalTitle = (res && res.title) || tabs[0].title || 'Saved Video';
                 let site = (res && res.site) || 'Web';
 
                 if (!finalUrl || finalUrl === 'about:blank' || finalUrl.startsWith('chrome://')) {
-                    alert('⚠️ Please open or play a video first!');
+                    popupToast('⚠️ Please open or play a video first!');
                     return;
                 }
 
                 // Check duplicate
                 if (watchLaterList.some(i => i.url === finalUrl)) {
-                    alert('ℹ️ Video is already in your Watch Later queue!');
+                    popupToast('ℹ️ Video is already in your Watch Later queue!');
                     wlContainer.classList.add('open');
                     return;
                 }

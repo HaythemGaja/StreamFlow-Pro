@@ -45,9 +45,13 @@
         }
         .card-speed-select:hover { border-color: var(--gmc-blue); }
 
-        .gmc-pip-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 3px; display: flex; align-items: center; }
+        .gmc-pip-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 3px; display: flex; align-items: center; border-radius: 50%; }
         .gmc-pip-btn svg { width: 16px; height: 16px; fill: currentColor; }
         .gmc-pip-btn:hover { color: #fff; }
+
+        .gmc-close-btn { background: none; border: none; color: var(--text-secondary); cursor: pointer; padding: 3px; display: flex; align-items: center; border-radius: 50%; }
+        .gmc-close-btn svg { width: 16px; height: 16px; fill: currentColor; }
+        .gmc-close-btn:hover { color: #ff5f56; background: rgba(255,95,86,0.12); }
 
         .gmc-content-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; }
         .gmc-info { flex: 1; overflow: hidden; display: flex; flex-direction: column; gap: 4px; }
@@ -158,6 +162,10 @@
                 <button id="btn-pip" class="gmc-pip-btn" title="Picture-in-Picture">
                     <svg viewBox="0 0 24 24"><path d="M19 11h-8v6h8v-6zm4 8V5c0-1.1-.9-2-2-2H3c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2zm-2 0H3V5h18v14z"/></svg>
                 </button>
+
+                <button id="btn-close" class="gmc-close-btn" title="Close (Esc)">
+                    <svg viewBox="0 0 24 24"><path d="M19 6.41L17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+                </button>
             </div>
         </div>
 
@@ -189,7 +197,7 @@
             <button id="btn-forward" class="gmc-transport-btn" title="Forward +10s">
                 <svg viewBox="0 0 24 24"><path d="M11.5 8c2.65 0 5.05 1 6.9 2.6L22 7v9h-9l3.62-3.62c-1.39-1.2-3.16-1.88-5.12-1.88-3.54 0-6.55 2.31-7.6 5.5l-2.37-.78C2.92 11.03 6.85 8 11.5 8z"/></svg>
             </button>
-            <button id="btn-next" class="gmc-transport-btn" title="Next Video">
+            <button id="btn-next" class="gmc-transport-btn" title="Forward +30s">
                 <svg viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg>
             </button>
         </div>

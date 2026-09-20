@@ -16,6 +16,16 @@
     let bassFilter = null;
     let vocalFilter = null;
     let hudFadeTimer = null;
+    let lastVideo = null; // most recently interacted-with video in THIS frame
+
+    // Tell the background worker that the video the user is watching lives in
+    // this frame, so the popup sends commands to exactly this frame instead of
+    // broadcasting to every iframe on the page.
+    function noteVideoActive(v) {
+        if (!v || isAdVideo(v)) return;
+        lastVideo = v;
+        try { chrome.runtime.sendMessage({ type: 'VIDEO_ACTIVE' }); } catch (e) {}
+    }
 
     ['click', 'keydown', 'pointerdown', 'touchstart'].forEach(evt => {
         window.addEventListener(evt, () => { hasUserInteracted = true; }, { once: true, capture: true });
@@ -75,8 +85,20 @@
     }
 
     function getActiveVideo() {
-        const vids = getAllVideos();
-        return vids.find(v => !v.paused && v.readyState > 0) || vids[0] || null;
+        const vids = getAllVideos().filter(v => v.readyState > 0);
+        if (vids.length === 0) return null;
+        // Prefer the video the user last interacted with in this frame.
+        if (lastVideo && lastVideo.isConnected && vids.includes(lastVideo)) return lastVideo;
+        // Otherwise pick the largest visible video — not the first hidden one
+        // (e.g. a preview or ad element sitting first in the DOM).
+        let best = vids[0];
+        let bestArea = -1;
+        for (const v of vids) {
+            const r = v.getBoundingClientRect();
+            const area = Math.max(0, r.width) * Math.max(0, r.height);
+            if (area > bestArea) { bestArea = area; best = v; }
+        }
+        return best;
     }
 
     function isAdVideo(v) {
@@ -101,6 +123,7 @@
 
     document.addEventListener('play', (e) => {
         if (e.target && e.target.tagName === 'VIDEO' && !isAdVideo(e.target)) {
+            noteVideoActive(e.target);
             e.target.playbackRate = persistentSpeed;
             e.target.volume = globalVolume;
             if (!location.hostname.includes('tiktok.com')) {
@@ -108,6 +131,11 @@
             }
             renderUpperCenterHudOnVideo(e.target);
         }
+    }, true);
+
+    // Clicking a video also elects it as the one the popup controls.
+    document.addEventListener('pointerdown', (e) => {
+        if (e.target && e.target.tagName === 'VIDEO') noteVideoActive(e.target);
     }, true);
 
     document.addEventListener('pause', () => {
@@ -123,6 +151,19 @@
             }
         }
     }, true);
+
+    // Some players (Facebook, Instagram) restore their OWN volume whenever you
+    // seek — so re-assert ours right after every seek, plus a 1s safety net in
+    // case a site rewrites volume/speed at any other moment.
+    document.addEventListener('seeked', (e) => {
+        if (e.target && e.target.tagName === 'VIDEO' && !isAdVideo(e.target)) {
+            const v = e.target;
+            if (v.playbackRate !== persistentSpeed) v.playbackRate = persistentSpeed;
+            if (Math.abs(v.volume - globalVolume) > 0.01) v.volume = globalVolume;
+        }
+    }, true);
+
+    setInterval(() => { enforcePersistentMedia(); }, 1000);
 
     // 2. A-B Repeat Loop
     function setPointA() {
@@ -688,15 +729,22 @@
                 if (yt && yt.innerText) title = yt.innerText.trim();
             } else if (location.hostname.includes('facebook.com')) {
                 site = 'Facebook';
-            } else if (location.hostname.includes('hentaihaven')) {
-                site = 'HentaiHaven';
             }
 
             sendResponse({ url: u, title: title, site: site });
         } else if (msg.action === 'TOGGLE_PLAY') {
             if (v) {
-                v.paused ? v.play() : v.pause();
-                updateMiniHudPlayState();
+                if (v.paused) {
+                    // play() is async and can reject (autoplay policy) — never
+                    // leave an unhandled rejection, and report the real state.
+                    v.play().then(() => sendResponse({ paused: false })).catch(() => sendResponse({ paused: true }));
+                } else {
+                    v.pause();
+                    updateMiniHudPlayState();
+                    sendResponse({ paused: true });
+                }
+            } else {
+                sendResponse({ paused: true, noVideo: true });
             }
         } else if (msg.action === 'SEEK_OFFSET') {
             if (v) v.currentTime += msg.offset;
